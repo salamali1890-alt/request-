@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KML Viewer + Subscription Request (v4 UI — CORS fix, no KML check)</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+  <style>
+    :root{ --bg:#0b1020; --panel:#101833; --text:#e9eefb; --muted:#aab4d6; --accent:#7aa2ff; --danger:#ff6b6b; --ok:#22c55e; }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial}
+    header{padding:14px 16px;background:rgba(255,255,255,0.03);display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+    h1{margin:0;font-size:18px;font-weight:700}
+    .controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-inline-start:auto}
+    .panel{background:var(--panel);padding:10px 12px;border-radius:14px;box-shadow:0 6px 20px rgba(0,0,0,.25);display:flex;gap:10px;align-items:center}
+    input[type=file]{color:var(--muted)}
+    button{background:var(--accent);color:#0b1020;border:0;border-radius:10px;padding:8px 12px;font-weight:600;cursor:pointer}
+    button.secondary{background:#394375;color:#e9eefb}
+    #map{height: calc(100vh - 72px); width:100vw;}
+    .legend{position:absolute;bottom:16px;inset-inline-end:16px;background:var(--panel);color:var(--text);padding:10px 12px;border-radius:12px;font-size:13px;line-height:1.5;box-shadow:0 6px 20px rgba(0,0,0,.25)}
+
+    .modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:5000}
+    .modal.show{display:flex}
+    .card{width:min(800px,92vw);background:#0f1631;border:1px solid rgba(255,255,255,.06);border-radius:16px;box-shadow:0 30px 60px rgba(0,0,0,.45)}
+    .card header{display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid rgba(255,255,255,.06);background:transparent}
+    .card header h2{margin:0;font-size:18px}
+    .card .body{padding:18px}
+    .grid{display:grid;gap:12px;grid-template-columns:repeat(2,1fr)}
+    label{font-size:12px;color:var(--muted);display:block;margin-bottom:6px}
+    input, select{width:100%;padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:#0c1430;color:#fff}
+    input[readonly]{opacity:.85}
+    .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px}
+    .left{margin-inline-start:auto}
+    .danger{background:var(--danger)!important;color:#000}
+    .ok{background:var(--ok)!important;color:#000}
+    .hint{font-size:12px;color:var(--muted);margin-top:6px}
+    .badge{display:inline-block;background:#1c275e;padding:3px 8px;border-radius:999px;font-size:11px;color:#cfe0ff}
+    .success{color:#86efac}
+    .error{color:#ff9191}
+    .pill{display:inline-block;padding:2px 8px;border-radius:999px;background:#223067;color:#cfe0ff;font-size:11px}
+    .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px;}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>عارض KML — Basra / Fiber X</h1>
+    <div class="controls">
+      <div class="panel">
+        <label><b>ارفع KML</b>:</label>
+        <input id="file" type="file" accept=".kml,.kmz" />
+        <button id="btnFit" disabled>تركيز على المنطقة</button>
+        <button id="btnExport" disabled>تنزيل GeoJSON</button>
+        <button id="btnLocate">إظهار موقعي</button>
+        <button id="btnForm" class="ok">طلب اشتراك</button>
+      </div>
+    </div>
+  </header>
+
+  <div id="map"></div>
+  <div class="legend">
+    <div><b>تعليمات</b></div>
+    <div>• ارفع <code>.kml</code> لعرض المناطق (اختياري)</div>
+    <div>• انقر على أي منطقة لملء اسمها ومحاولة تقدير FDT/FAT</div>
+    <div>• اضغط <b>إظهار موقعي</b> ثم <span class="pill">موقعي الآن</span> داخل الفورم لتعبئة الإحداثيات</div>
+  </div>
+
+  <!-- Modal Form -->
+  <div class="modal" id="modal">
+    <div class="card">
+      <header>
+        <h2>طلب اشتراك جديد <span class="badge" id="stamp"></span></h2>
+        <button id="btnClose" class="danger">إغلاق</button>
+      </header>
+      <div class="body">
+        <div class="grid">
+          <div>
+            <label>اسم الزبون</label>
+            <input id="custName" placeholder="الاسم الثلاثي" />
+          </div>
+          <div>
+            <label>رقم الهاتف</label>
+            <input id="phone" placeholder="07xxxxxxxxx" inputmode="numeric" />
+          </div>
+          <div>
+            <label>نوع الاشتراك المحتمل</label>
+            <select id="plan">
+              <option value="">— اختر —</option>
+              <option>p1</option><option>p2</option><option>p3</option>
+              <option>p4</option><option>p5</option><option>p6</option>
+            </select>
+          </div>
+          <div>
+            <label>الخدمة الحالية</label>
+            <select id="currentService">
+              <option value="">— اختر —</option>
+              <option value="EarthLink">ايرث لنك</option>
+              <option value="Towers">ابراج</option>
+              <option value="Other">اخرى</option>
+            </select>
+          </div>
+          <div>
+            <label>تاريخ انتهاء الاشتراك الحالي</label>
+            <input id="expiration" type="date" />
+          </div>
+          <div>
+            <label>الموقع الحالي (Lat / Lng)</label>
+            <div class="row">
+              <input id="lat" placeholder="Latitude" />
+              <input id="lng" placeholder="Longitude" />
+              <button id="btnUseMyLoc" class="secondary">موقعي الآن</button>
+            </div>
+          </div>
+          <div>
+            <label>اسم المنطقة (من KML)</label>
+            <input id="regionName" placeholder="— يتم تعبئته عند النقر على المنطقة —" readonly />
+          </div>
+          <div>
+            <label>FDT</label>
+            <input id="fdt" placeholder="تُملأ تلقائيًا عند الإمكان — قابلة للتعديل" />
+          </div>
+          <div>
+            <label>FAT</label>
+            <input id="fat" placeholder="تُملأ تلقائيًا عند الإمكان — قابلة للتعديل" />
+          </div>
+        </div>
+
+        <div class="row" style="margin-top:16px">
+          <button id="btnSaveCSV">تنزيل CSV</button>
+          <button id="btnSaveXLSX">تنزيل Excel</button>
+          <button id="btnCopyJSON">نسخ كـ JSON</button>
+          <button id="btnSend" class="ok">إرسال إلى Google Sheet</button>
+          <span class="left hint" id="status"></span>
+        </div>
+        <div class="hint mono" id="raw"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tmcw/togeojson@5.8.0/dist/togeojson.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+  <script>
+    const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwM2ilIPxkB81hMU1amFPhfia16jZtnTdKkpJG1Gnz-QYvhd6cs0NolasYZB7RyyjPOCA/exec";
+
+    const map = L.map('map', {zoomControl:true}).setView([30.50, 47.80], 10);
+    const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 20, attribution: '&copy; OpenStreetMap' }).addTo(map);
+    const esriSat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 20, attribution: 'Tiles &copy; Esri' });
+    L.control.layers({ "OpenStreetMap": osm, "Esri Satellite": esriSat }).addTo(map);
+
+    // ====== KML handling (optional) ======
+    let geoLayer = null;
+    let lastGeoJSON = null;
+
+    function featureStyle(f){ return { color: f.properties?.stroke || '#7aa2ff', weight:2, opacity:.9, fillColor: f.properties?.fill || '#7aa2ff', fillOpacity:.15 }; }
+
+    function parseFdtFatFromName(name){
+      if (!name) return {fdt:'', fat:''};
+      if (name.includes('/')){
+        const [left, right] = name.split('/').map(s=>s.trim());
+        return { fdt: left || '', fat: right || '' };
+      }
+      const parts = name.split('-').map(s=>s.trim()).filter(Boolean);
+      if (parts.length >= 3){
+        const fdt = parts.slice(0,2).join('-');
+        const fat = parts[2];
+        return { fdt, fat };
+      }
+      return {fdt:'', fat:''};
+    }
+
+    function onEachFeature(feature, layer){
+      const p = feature.properties || { };
+      const name = p.name || p.Name || 'Unnamed';
+      const desc = p.description || p.Description || '';
+      let html = `<b>${name}</b>`; if (desc) html += `<br/><div style=\"max-width:320px;white-space:pre-wrap\">${desc}</div>`;
+      layer.bindPopup(html);
+      layer.on('click', () => {
+        document.getElementById('regionName').value = name;
+        const {fdt, fat} = parseFdtFatFromName(name);
+        if (fdt) document.getElementById('fdt').value = fdt;
+        if (fat) document.getElementById('fat').value = fat;
+      });
+    }
+
+    function fitToLayer(layer){ try{ map.fitBounds(layer.getBounds(), {padding:[30,30]}); }catch(e){} }
+
+    const input = document.getElementById('file');
+    const btnFit = document.getElementById('btnFit');
+    const btnExport = document.getElementById('btnExport');
+    input.addEventListener('change', async (e)=>{
+      const file = e.target.files?.[0]; if(!file) return;
+      const ext = (file.name.split('.').pop()||'').toLowerCase();
+      if(ext!=='kml'){ alert('الرجاء رفع ملف KML (امتداد .kml).'); return; }
+      const text = await file.text();
+      const dom = new DOMParser().parseFromString(text, 'text/xml');
+      const gj = toGeoJSON.kml(dom);
+      lastGeoJSON = gj;
+      if (geoLayer) { map.removeLayer(geoLayer); geoLayer = null; }
+      geoLayer = L.geoJSON(gj, {style: featureStyle, onEachFeature}).addTo(map);
+      fitToLayer(geoLayer);
+      btnFit.disabled = false; btnExport.disabled = false;
+    });
+    btnFit.addEventListener('click', ()=>{ if(geoLayer) fitToLayer(geoLayer); });
+    btnExport.addEventListener('click', ()=>{
+      if(!lastGeoJSON) return;
+      const blob = new Blob([JSON.stringify(lastGeoJSON, null, 2)], {type:'application/json'});
+      const url = URL.createObjectURL(blob); const a = document.createElement('a');
+      a.href=url; a.download='kml_converted.geojson'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    });
+
+    // ===== My location (blue dot) =====
+    let myMarker = null, lastLatLng = null;
+    function updateMyLocation(lat, lng){
+      lastLatLng = [lat, lng];
+      if (myMarker) myMarker.setLatLng([lat,lng]);
+      else myMarker = L.circleMarker([lat,lng], { radius:6, color:'#3b82f6', fillColor:'#3b82f6', fillOpacity:1, weight:2 }).addTo(map);
+    }
+    document.getElementById('btnLocate').addEventListener('click', ()=>{
+      if(!('geolocation' in navigator)){ alert('المتصفح لا يدعم تحديد الموقع.'); return; }
+      navigator.geolocation.watchPosition(
+        (pos)=>{ updateMyLocation(pos.coords.latitude, pos.coords.longitude); },
+        (err)=>{ alert('تعذر الحصول على الموقع: '+err.message); },
+        { enableHighAccuracy:true, maximumAge:5000, timeout:20000 }
+      );
+    });
+
+    // ===== Modal / Form =====
+    const modal = document.getElementById('modal');
+    const btnForm = document.getElementById('btnForm');
+    const btnClose = document.getElementById('btnClose');
+    const btnUseMyLoc = document.getElementById('btnUseMyLoc');
+    const statusNode = document.getElementById('status');
+    const rawNode = document.getElementById('raw');
+    const stamp = document.getElementById('stamp');
+
+    function nowStamp(){
+      const d=new Date(); const p=n=>String(n).padStart(2,'0');
+      return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    }
+    function openForm(){ stamp.textContent = nowStamp(); modal.classList.add('show'); }
+    function closeForm(){ modal.classList.remove('show'); statusNode.textContent=''; rawNode.textContent=''; }
+    btnForm.addEventListener('click', openForm);
+    btnClose.addEventListener('click', closeForm);
+
+    btnUseMyLoc.addEventListener('click', ()=>{
+      if(!lastLatLng){ statusNode.textContent='⚠ أولًا اضغط "إظهار موقعي" ثم أعد المحاولة.'; return; }
+      const [la, ln] = lastLatLng;
+      document.getElementById('lat').value = la.toFixed(6);
+      document.getElementById('lng').value = ln.toFixed(6);
+      statusNode.textContent = '✅ تم تعبئة الإحداثيات.';
+    });
+
+    function getFormData(){
+      const lat = document.getElementById('lat').value.trim();
+      const lng = document.getElementById('lng').value.trim();
+      const locationCombined = lat && lng ? `${lat} ${lng}` : '';
+      return {
+        timestamp: nowStamp(),
+        customer_name: document.getElementById('custName').value.trim(),
+        phone: document.getElementById('phone').value.trim(),
+        potential_plan: document.getElementById('plan').value,
+        current_service: document.getElementById('currentService').value,
+        current_expiration: document.getElementById('expiration').value,
+        lat, lng, location: locationCombined,
+        region_name: document.getElementById('regionName').value.trim(),
+        fdt: document.getElementById('fdt').value.trim(),
+        fat: document.getElementById('fat').value.trim()
+      };
+    }
+
+    function validate(d){
+      if(!d.customer_name) return 'الاسم مطلوب';
+      if(!/^(07)\d{9}$/.test(d.phone)) return 'صيغة الهاتف يجب أن تكون 07xxxxxxxxx';
+      if(!d.location) return 'الرجاء تعبئة الإحداثيات (استخدم "موقعي الآن")';
+      if(!d.potential_plan) return 'الرجاء اختيار نوع الاشتراك المحتمل';
+      if(!d.current_service) return 'الرجاء اختيار الخدمة الحالية';
+      return '';
+    }
+
+    function exportCSV(){
+      const d = getFormData();
+      const err = validate(d);
+      if(err){ statusNode.textContent='⚠ '+err; return; }
+      const headers = ['timestamp','customer_name','phone','potential_plan','current_service','current_expiration','location','region_name','fdt','fat'];
+      const row = headers.map(h=> (d[h]||'').toString().replaceAll('"','""'));
+      const csv = headers.join(',') + '\n' + row.map(v=>`"${v}"`).join(',');
+      const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+      const a = document.createElement('a'); const url = URL.createObjectURL(blob);
+      a.href = url; a.download = 'subscription_request.csv'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+      statusNode.textContent='✅ تم تنزيل CSV';
+    }
+
+    function exportXLSX(){
+      const d = getFormData();
+      const err = validate(d);
+      if(err){ statusNode.textContent='⚠ '+err; return; }
+      const wb = XLSX.utils.book_new();
+      const exportRow = [{
+        timestamp: d.timestamp,
+        customer_name: d.customer_name,
+        phone: d.phone,
+        potential_plan: d.potential_plan,
+        current_service: d.current_service,
+        current_expiration: d.current_expiration,
+        location: d.location,
+        region_name: d.region_name,
+        fdt: d.fdt, fat: d.fat
+      }];
+      const ws = XLSX.utils.json_to_sheet(exportRow, { header: ['timestamp','customer_name','phone','potential_plan','current_service','current_expiration','location','region_name','fdt','fat'] });
+      XLSX.utils.book_append_sheet(wb, ws, 'Request');
+      XLSX.writeFile(wb, 'subscription_request.xlsx');
+      statusNode.textContent='✅ تم تنزيل Excel';
+    }
+
+    async function sendToSheet(){
+      const d = getFormData();
+      const err = validate(d);
+      if(err){ statusNode.textContent='⚠ '+err; return; }
+      statusNode.textContent='⏳ يتم الإرسال...'; rawNode.textContent='';
+      try{
+        // CORS-friendly: use text/plain to avoid preflight
+        const res = await fetch(WEB_APP_URL, {
+          method:'POST',
+          headers:{ 'Content-Type':'text/plain;charset=utf-8' },
+          body: JSON.stringify(d)
+        });
+        const txt = await res.text();
+        rawNode.innerHTML = 'Response:<br><span class="mono">'+txt.replace(/</g,'&lt;')+'</span>';
+        if (!res.ok) throw new Error(txt || 'HTTP error');
+        statusNode.innerHTML = '✅ <span class="success">تم إرسال الطلب إلى Google Sheet.</span>';
+      }catch(e){
+        statusNode.innerHTML = '❌ <span class="error">فشل الإرسال: ' + (e.message||e) + '</span>';
+      }
+    }
+
+    document.getElementById('btnSaveCSV').addEventListener('click', exportCSV);
+    document.getElementById('btnSaveXLSX').addEventListener('click', exportXLSX);
+    document.getElementById('btnCopyJSON').addEventListener('click', ()=>{
+      const d = getFormData();
+      const err = validate(d);
+      if(err){ statusNode.textContent='⚠ '+err; return; }
+      const text = JSON.stringify(d, null, 2);
+      navigator.clipboard.writeText(text).then(()=>{ statusNode.textContent='✅ تم نسخ JSON'; })
+      .catch(()=>{ statusNode.textContent='⚠ تعذر النسخ التلقائي — انسخ يدويًا'; console.log(text); });
+    });
+    document.getElementById('btnSend').addEventListener('click', sendToSheet);
+  </script>
+</body>
+</html>
