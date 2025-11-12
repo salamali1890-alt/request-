@@ -212,6 +212,7 @@
 
     // ===== My location (blue dot) =====
     let myMarker = null, lastLatLng = null;
+    
     function updateMyLocation(lat, lng){
       lastLatLng = [lat, lng];
       if (myMarker) myMarker.setLatLng([lat,lng]);
