@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>KML Viewer + Subscription Request (Fiber X — Mobile + Google Form)</title>
 
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+  <!-- Leaflet من jsDelivr -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
   <style>
     :root{
       --bg:#0b1020;
@@ -241,10 +242,8 @@
       transform:translateY(0);
     }
 
-    @media (max-width:768px){
-      .grid{
-        grid-template-columns:1fr;
-      }
+    /* شاشة موبايل: الفورم بكولمن واحد وبكامل الشاشة */
+    @media (max-width: 768px){
       header{
         padding:8px 10px;
       }
@@ -254,8 +253,43 @@
       .panel{
         padding:8px;
       }
-      button{
+      .panel button{
         flex:1 1 48%;
+      }
+      .modal{
+        align-items:stretch;
+      }
+      .card{
+        max-width:100%;
+        max-height:100vh;
+        height:100vh;
+        border-radius:0;
+      }
+      .card header{
+        position:sticky;
+        top:0;
+        background:#0f1631;
+        z-index:10;
+      }
+      .card .body{
+        padding:10px 10px 14px;
+      }
+      .grid{
+        grid-template-columns:1fr;
+      }
+      input, select, textarea{
+        font-size:14px;
+      }
+    }
+
+    /* أزرار أصغر على اللابتوب */
+    @media (min-width: 900px){
+      .panel button{
+        flex:0 0 auto;
+        width:140px;
+      }
+      .panel input[type=file]{
+        width:260px;
       }
     }
   </style>
@@ -380,11 +414,16 @@
     </div>
   </div>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <!-- JS libs من jsDelivr -->
+  <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <script src="https://cdn.jsdelivr.net/npm/@tmcw/togeojson@5.8.0/dist/togeojson.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
   <script>
+    if (typeof L === 'undefined') {
+      alert('تعذر تحميل مكتبة الخريطة Leaflet. تأكد من اتصال الإنترنت وعدم حجب موقع jsDelivr من مزود الخدمة لديك.');
+    }
+
     const map = L.map('map', {zoomControl:true}).setView([30.50, 47.80], 10);
     const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 20, attribution: '&copy; OpenStreetMap' }).addTo(map);
     const esriSat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 20, attribution: 'Tiles &copy; Esri' });
@@ -532,7 +571,7 @@
       }
 
       if (location.protocol !== 'https:' && location.hostname !== 'localhost'){
-        alert('⚠ يفضل تشغيل هذه الصفحة عبر HTTPS أو من localhost للحصول على موقع GPS دقيق. حالياً قد يستخدم فقط موقع IP التقريبي.');
+        alert('⚠ للحصول على موقع دقيق يفضل فتح الصفحة عبر HTTPS أو من localhost. من وضع file:// قد يستخدم المتصفح موقع IP فقط أو يمنع تحديد الموقع.');
       }
 
       navigator.geolocation.getCurrentPosition(
@@ -679,8 +718,7 @@
         'location','region_name','fdt','fat','notes'
       ];
       const row = headers.map(h=> (d[h]||'').toString().replace(/"/g,'""'));
-      const csv = headers.join(',') + '
-' + row.map(v=>'"'+v+'"').join(',');
+      const csv = headers.join(',') + '\n' + row.map(v=>'"'+v+'"').join(',');
       const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
       const a = document.createElement('a');
       const url = URL.createObjectURL(blob);
