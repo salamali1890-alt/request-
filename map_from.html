@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <title>خريطة تصنيفات المشتركين من Google Sheet</title>
+
+  <!-- Leaflet CSS -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 0;
+      padding: 0;
+      background: #f5f5f5;
+      direction: rtl;
+    }
+
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 1rem;
+    }
+
+    h1 {
+      font-size: 1.4rem;
+      margin-bottom: 0.5rem;
+      text-align: center;
+    }
+
+    .card {
+      background: #fff;
+      padding: 1rem;
+      border-radius: 0.75rem;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+      margin-bottom: 1rem;
+    }
+
+    button {
+      padding: 0.5rem 1rem;
+      border-radius: 0.5rem;
+      border: none;
+      cursor: pointer;
+      font-size: 0.9rem;
+      font-weight: 600;
+      background: #2563eb;
+      color: #fff;
+      white-space: nowrap;
+    }
+
+    button.secondary {
+      background: #6b7280;
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: default;
+    }
+
+    .btn-row {
+      margin-top: 0.75rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+
+    #status {
+      margin-top: 0.5rem;
+      font-size: 0.9rem;
+      color: #555;
+      white-space: pre-line;
+    }
+
+    #map {
+      width: 100%;
+      height: 75vh;
+      border-radius: 0.75rem;
+      overflow: hidden;
+    }
+
+    .legend {
+      background: white;
+      padding: 8px 10px;
+      line-height: 1.4;
+      border-radius: 6px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+      font-size: 12px;
+    }
+    .legend i {
+      width: 14px;
+      height: 14px;
+      float: right;
+      margin-left: 8px;
+      opacity: 0.8;
+      border-radius: 50%;
+    }
+
+    @media (max-width: 768px) {
+      #map {
+        height: 65vh;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>تسقيط المشتركين من Google Sheet على الخريطة</h1>
+
+    <div class="card">
+      <p>
+        هذا الكود مربوط على الشيت:
+        <br>
+        <b>Form Responses 1</b> في الملف مالك على Google Sheets.
+        <br>
+        تأكد أن الملف مشارك كـ <b>Anyone with the link → Viewer</b>.
+      </p>
+      <button id="loadBtn">تحميل البيانات من الشيت</button>
+
+      <!-- أزرار الفلترة -->
+      <div class="btn-row">
+        <button id="showAllBtn" class="secondary">عرض الكل</button>
+        <button id="showBusinessBtn" class="secondary">فقط التجاري</button>
+        <button id="showResidentialBtn" class="secondary">فقط السكني</button>
+        <button id="showBuildingBtn" class="secondary">فقط العمارة</button>
+      </div>
+
+      <!-- أزرار التحميل KML/KMZ -->
+      <div class="btn-row">
+        <button id="downloadKmlBtn">Download KML (الكل)</button>
+        <button id="downloadKmzBtn">Download KMZ (الكل)</button>
+      </div>
+
+      <div id="status">اضغط على زر تحميل البيانات.</div>
+    </div>
+
+    <div id="map" class="card"></div>
+  </div>
+
+  <!-- Leaflet JS -->
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+
+  <!-- PapaParse لقراءة CSV -->
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+
+  <!-- FileSaver + JSZip للـ KML/KMZ -->
+  <script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+
+  <script>
+    // رابط CSV من الشيت مالك (Form Responses 1)
+    const SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRrzN3PdFIbDa268VwQQpzxQRxnLKqjdJBylmX7Uqwhmm3y47o4D_Ff-oEtFylrUVTA66rjuGsaXeKP/pub?output=csv";
+
+    // إنشاء الخريطة على Basra تقريبياً
+    const map = L.map("map").setView([30.5, 47.82], 12);
+
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    const markersLayer = L.layerGroup().addTo(map);
+
+    // الألوان في الخريطة
+    const categoryColors = {
+      "تجاري": "red",
+      "سكني": "blue",
+      "عمارة": "orange"
+    };
+
+    // نخزن كل النقاط هنا حتى نستخدمها للفلترة و KML/KMZ
+    let allPoints = [];
+
+    function getField(row, searchText) {
+      for (const key in row) {
+        if (key && key.toString().includes(searchText)) {
+          return row[key];
+        }
+      }
+      return null;
+    }
+
+    function getCategoryColor(category) {
+      const clean = (category || "").toString().trim();
+      return categoryColors[clean] || "gray";
+    }
+
+    function parseLatLng(latlngStr) {
+      if (!latlngStr) return null;
+      const parts = latlngStr
+        .toString()
+        .split(",")
+        .map((p) => p.trim())
+        .filter((p) => p.length > 0);
+
+      if (parts.length !== 2) return null;
+
+      const lat = parseFloat(parts[0].replace(/[^\d\.\-]/g, ""));
+      const lng = parseFloat(parts[1].replace(/[^\d\.\-]/g, ""));
+
+      if (isNaN(lat) || isNaN(lng)) return null;
+
+      return [lat, lng];
+    }
+
+
+    // رسم النقاط حسب فلتر التصنيف (أو الكل)
+    function renderMarkers(filterCategory = null) {
+      const status = document.getElementById("status");
+
+      markersLayer.clearLayers();
+      const bounds = [];
+      let countTotal = 0;
+      const perCategory = {};
+
+      allPoints.forEach((p) => {
+        const catTrim = (p.category || "").toString().trim();
+
+        if (filterCategory && catTrim !== filterCategory) {
+          return;
+        }
+
+        const color = getCategoryColor(p.category);
+
+        let popupHtml = "<b>الاسم:</b> " + (p.name || "-") + "<br/>";
+        popupHtml += "<b>التصنيف:</b> " + (p.category || "-") + "<br/>";
+        popupHtml += "<b>الهاتف:</b> " + (p.phone || "-") + "<br/>";
+        popupHtml += "<b>الإحداثيات:</b> " + p.lat.toFixed(6) + ", " + p.lng.toFixed(6) + "<br/>";
+        if (p.notes) {
+          popupHtml += "<b>ملاحظات:</b> " + p.notes + "<br/>";
+        }
+
+        const marker = L.circleMarker([p.lat, p.lng], {
+          radius: 7,
+          fillColor: color,
+          color: color,
+          weight: 1,
+          opacity: 1,
+          fillOpacity: 0.7
+        }).bindPopup(popupHtml);
+
+        marker.addTo(markersLayer);
+        bounds.push([p.lat, p.lng]);
+
+        countTotal++;
+        const catKey = (p.category || "غير محدد").toString().trim();
+        perCategory[catKey] = (perCategory[catKey] || 0) + 1;
+      });
+
+      if (bounds.length > 0) {
+        map.fitBounds(bounds, { padding: [30, 30] });
+      }
+
+      let text = "تم تسقيط " + countTotal + " نقطة على الخريطة.\n";
+      text += "عدد النقاط لكل تصنيف (من المعروض حالياً):\n";
+      Object.keys(perCategory).forEach((cat) => {
+        text += "- " + cat + ": " + perCategory[cat] + "\n";
+      });
+      status.textContent = text;
+    }
+
+    async function loadDataFromSheet() {
+      const status = document.getElementById("status");
+      const btn = document.getElementById("loadBtn");
+
+      status.textContent = "جاري تحميل البيانات من Google Sheet...";
+      btn.disabled = true;
+
+      try {
+        const response = await fetch(SHEET_CSV_URL);
+        if (!response.ok) {
+          throw new Error("فشل تحميل CSV من Google Sheets");
+        }
+
+        const csvText = await response.text();
+
+        const parsed = Papa.parse(csvText, {
+          header: true,
+          skipEmptyLines: true
+        });
+
+        const jsonData = parsed.data;
+
+        if (!jsonData.length) {
+          status.textContent = "الملف لا يحتوي بيانات.";
+          btn.disabled = false;
+          return;
+        }
+
+        allPoints = []; // نصفر قبل كل تحميل جديد
+
+        jsonData.forEach((row) => {
+          const latlngStr = getField(row, "الموقع");
+          const category  = getField(row, "تصنيف المشترك");
+          const name      = getField(row, "اسم الزبون") || getField(row, "اسم الزبون ");
+          const phone     = getField(row, "رقم الهاتف") || getField(row, "  رقم الهاتف  ");
+          const notes     = getField(row, "الملاحظات");
+
+          const coords = parseLatLng(latlngStr);
+          if (!coords) return;
+
+          const [lat, lng] = coords;
+
+          allPoints.push({
+            lat,
+            lng,
+            category,
+            name,
+            phone,
+            notes
+          });
+        });
+
+        if (!allPoints.length) {
+          status.textContent = "لا توجد نقاط تحتوي على إحداثيات صحيحة.";
+          btn.disabled = false;
+          return;
+        }
+
+        // عرض الكل بدايةً
+        renderMarkers(null);
+
+      } catch (err) {
+        console.error(err);
+        status.textContent = "حدث خطأ أثناء تحميل أو قراءة البيانات.\nتأكد أن الشيت مشارك Anyone with link → Viewer.";
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    // توليد KML من النقاط
+    function escapeXml(value) {
+      return (value || "")
+        .toString()
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&apos;");
+    }
+
+    function generateKml(points) {
+      // ألوان KML (aabbggrr)
+      const kmlStyles = {
+        "تجاري":  { id: "cat-commercial",  color: "ff0000ff" }, // أحمر
+        "سكني":   { id: "cat-residential", color: "ffff0000" }, // أزرق
+        "عمارة":  { id: "cat-building",    color: "ff00a5ff" }, // برتقالي
+        "other":  { id: "cat-other",       color: "ff808080" }  // رمادي
+      };
+
+      let stylesXml = "";
+      Object.values(kmlStyles).forEach(st => {
+        stylesXml += `
+  <Style id="${st.id}">
+    <IconStyle>
+      <color>${st.color}</color>
+      <scale>1.2</scale>
+      <Icon>
+        <href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href>
+      </Icon>
+    </IconStyle>
+  </Style>`;
+      });
+
+      let placemarksXml = "";
+      points.forEach(p => {
+        const cat = (p.category || "غير محدد").toString().trim();
+        const style = kmlStyles[cat] || kmlStyles["other"];
+
+        const name = escapeXml(p.name || "-");
+        const descHtml = `
+<b>الاسم:</b> ${p.name || "-"}<br/>
+<b>التصنيف:</b> ${p.category || "-"}<br/>
+<b>الهاتف:</b> ${p.phone || "-"}<br/>
+<b>الإحداثيات:</b> ${p.lat}, ${p.lng}<br/>
+${p.notes ? "<b>ملاحظات:</b> " + p.notes : ""}
+        `.trim();
+
+        placemarksXml += `
+  <Placemark>
+    <name>${name}</name>
+    <description><![CDATA[${descHtml}]]></description>
+    <styleUrl>#${style.id}</styleUrl>
+    <Point>
+      <coordinates>${p.lng},${p.lat},0</coordinates>
+    </Point>
+  </Placemark>`;
+      });
+
+      const kml = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+<Document>
+  <name>Subscribers Map</name>
+  ${stylesXml}
+  ${placemarksXml}
+</Document>
+</kml>`;
+
+      return kml;
+    }
+
+    // Download KML
+    function downloadKml() {
+      if (!allPoints.length) {
+        alert("لا توجد بيانات بعد. حمّل البيانات أولاً.");
+        return;
+      }
+      const kml = generateKml(allPoints);
+      const blob = new Blob([kml], { type: "application/vnd.google-earth.kml+xml" });
+      saveAs(blob, "subscribers_map.kml");
+    }
+
+    // Download KMZ (ملف مضغوط يحتوي KML)
+    function downloadKmz() {
+      if (!allPoints.length) {
+        alert("لا توجد بيانات بعد. حمّل البيانات أولاً.");
+        return;
+      }
+      const kml = generateKml(allPoints);
+      const zip = new JSZip();
+      zip.file("doc.kml", kml);
+      zip.generateAsync({ type: "blob" }).then(function (blob) {
+        saveAs(blob, "subscribers_map.kmz");
+      });
+    }
+
+    // الأحداث
+    document.getElementById("loadBtn").addEventListener("click", loadDataFromSheet);
+
+    document.getElementById("showAllBtn").addEventListener("click", () => renderMarkers(null));
+    document.getElementById("showBusinessBtn").addEventListener("click", () => renderMarkers("تجاري"));
+    document.getElementById("showResidentialBtn").addEventListener("click", () => renderMarkers("سكني"));
+    document.getElementById("showBuildingBtn").addEventListener("click", () => renderMarkers("عمارة"));
+
+    document.getElementById("downloadKmlBtn").addEventListener("click", downloadKml);
+    document.getElementById("downloadKmzBtn").addEventListener("click", downloadKmz);
+
+    // Legend
+    const legend = L.control({ position: "bottomleft" });
+    legend.onAdd = function() {
+      const div = L.DomUtil.create("div", "legend");
+      div.innerHTML += "<strong>تصنيفات المشتركين</strong><br>";
+
+      const cats = [
+        ["تجاري", "red"],
+        ["سكني", "blue"],
+        ["عمارة", "orange"],
+        ["أخرى", "gray"]
+      ];
+
+      cats.forEach(([name, color]) => {
+        div.innerHTML += `<i style="background:${color}"></i>${name}<br>`;
+      });
+
+      return div;
+    };
+    legend.addTo(map);
+  </script>
+</body>
+</html>
