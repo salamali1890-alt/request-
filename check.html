@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <title>عرض خريطة الفات - FAT</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://unpkg.com/@tmcw/togeojson@0.16.0/dist/togeojson.umd.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+  <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <style>
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; direction: rtl; }
+    #map { height: 80vh; width: 100%; }
+    #controls { padding: 10px; background: #f0f0f0; text-align: center; }
+    input[type="file"], button { margin: 5px; padding: 8px; font-size: 14px; }
+    #legend { background: white; padding: 8px; border: 1px solid #ccc; position: absolute; bottom: 20px; left: 20px; z-index: 1000; }
+    #stats { background: white; padding: 10px; margin: 10px; border: 1px solid #ccc; max-width: 300px; float: right; }
+  </style>
+</head>
+<body>
+<div id="controls">
+  <label>رفع ملف KML:</label><input type="file" id="kmlInput" accept=".kml" />
+  <label>رفع ملف Excel:</label><input type="file" id="excelInput" accept=".xlsx" />
+  <button onclick="downloadAsImage()">تحميل الخريطة كصورة</button>
+  <button onclick="downloadKMZ()">تحميل KMZ</button>
+</div>
+<div id="map"></div>
+<div id="legend">
+  <b>وسيلة الإيضاح:</b><br>
+  🟥 0 مستخدم<br>
+  🟨 من 1 إلى 4 مستخدمين<br>
+  🟩 5 أو أكثر
+</div>
+<div id="stats"></div>
+
+<script>
+const map = L.map("map").setView([30.52, 47.87], 14);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map);
+
+const fatUsers = {};
+const fatCoords = {};
+let geoJsonLayer = null;
+let originalKmlDoc = null;
+
+function updateStats() {
+  const entries = Object.entries(fatUsers);
+  const total = entries.length;
+  const max = entries.reduce((a, b) => (a[1] > b[1] ? a : b), [null, 0]);
+  const min = entries.reduce((a, b) => (a[1] < b[1] ? a : b), [null, Infinity]);
+  document.getElementById('stats').innerHTML = `
+    <h4>إحصائيات:</h4>
+    عدد الفاتات: ${total}<br>
+    الأعلى: ${max[0]} (${max[1]})<br>
+    الأدنى: ${min[0]} (${min[1]})
+  `;
+}
+
+document.getElementById("excelInput").addEventListener("change", function (e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function (e) {
+    const data = new Uint8Array(e.target.result);
+    const workbook = XLSX.read(data, { type: "array" });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(sheet);
+
+    rows.forEach((row) => {
+      const fat = row["fat"]?.toString().trim();
+      const users = parseInt(row["no of user"]) || 0;
+      if (!fat) return;
+      fatUsers[fat] = users;
+
+      if (row["coordinate"]) {
+        const parts = row["coordinate"].split(" ");
+        if (parts.length === 2) {
+          const lat = parseFloat(parts[0]);
+          const lng = parseFloat(parts[1]);
+          if (!isNaN(lat) && !isNaN(lng)) {
+            fatCoords[fat] = [lat, lng];
+            const color = users === 0 ? "red" : users < 5 ? "orange" : "green";
+            L.circleMarker([lat, lng], {
+              radius: 5,
+              color: color,
+              fillColor: color,
+              fillOpacity: 0.8,
+            }).bindPopup(`FAT: ${fat}<br>Users: ${users}`).addTo(map);
+          }
+        }
+      }
+    });
+    updateStats();
+  };
+  reader.readAsArrayBuffer(file);
+});
+
+document.getElementById("kmlInput").addEventListener("change", function (e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function (e) {
+    const parser = new DOMParser();
+    originalKmlDoc = parser.parseFromString(e.target.result, "text/xml");
+    const geojson = window.toGeoJSON.kml(originalKmlDoc);
+
+    if (geoJsonLayer) map.removeLayer(geoJsonLayer);
+    geoJsonLayer = L.geoJSON(geojson, {
+      style: function (feature) {
+        const name = feature.properties.name?.trim();
+        const count = fatUsers[name] || 0;
+        const color = count === 0 ? "#ff0000" : count < 5 ? "#ffff00" : "#00ff00";
+        return {
+          color: color,
+          weight: 2,
+          fillColor: color,
+          fillOpacity: 0.35,
+        };
+      }
+    }).addTo(map);
+  };
+  reader.readAsText(file);
+});
+
+function downloadAsImage() {
+  html2canvas(document.querySelector("#map")).then((canvas) => {
+    canvas.toBlob((blob) => {
+      saveAs(blob, "fat_map.png");
+    });
+  });
+}
+
+function downloadKMZ() {
+  if (!originalKmlDoc) {
+    alert("يرجى تحميل ملف KML أولاً.");
+    return;
+  }
+
+  const serializer = new XMLSerializer();
+  const doc = originalKmlDoc.cloneNode(true);
+  const documentNode = doc.getElementsByTagName("Document")[0];
+
+  const iconMap = {
+    red: "http://maps.google.com/mapfiles/kml/paddle/red-circle.png",
+    yellow: "http://maps.google.com/mapfiles/kml/paddle/ylw-circle.png",
+    green: "http://maps.google.com/mapfiles/kml/paddle/grn-circle.png"
+  };
+
+  for (const [color, href] of Object.entries(iconMap)) {
+    const hex = color === "red" ? "ff0000ff" : color === "yellow" ? "ff00ffff" : "ff00ff00";
+    const style = doc.createElement("Style");
+    style.setAttribute("id", color);
+    style.innerHTML = `
+      <IconStyle><scale>0</scale></IconStyle>
+      <LabelStyle>
+        <scale>1.2</scale>
+        <color>ff000000</color>
+      </LabelStyle>
+      <LineStyle><color>${hex}</color><width>2</width></LineStyle>
+      <PolyStyle><color>66${hex.substring(2, 8)}</color></PolyStyle>
+    `;
+    documentNode.appendChild(style);
+  }
+
+  const placemarks = doc.getElementsByTagName("Placemark");
+  for (const placemark of placemarks) {
+    const nameNode = placemark.getElementsByTagName("name")[0];
+    const name = nameNode?.textContent.trim();
+    const count = fatUsers[name] || 0;
+    const styleUrl = count === 0 ? "#red" : count < 5 ? "#yellow" : "#green";
+
+    let styleNode = placemark.getElementsByTagName("styleUrl")[0];
+    if (!styleNode) {
+      styleNode = doc.createElement("styleUrl");
+      placemark.appendChild(styleNode);
+    }
+    styleNode.textContent = styleUrl;
+
+    let descriptionNode = placemark.getElementsByTagName("description")[0];
+    if (!descriptionNode) {
+      descriptionNode = doc.createElement("description");
+      placemark.appendChild(descriptionNode);
+    }
+    descriptionNode.textContent = `FAT: ${name}\nعدد المستخدمين: ${count}`;
+  }
+
+  for (const fat in fatUsers) {
+    const count = fatUsers[fat];
+    const coord = fatCoords[fat];
+    if (!coord) continue;
+    const [lat, lon] = coord;
+    const color = count === 0 ? "red" : count < 5 ? "yellow" : "green";
+
+    const placemark = doc.createElement("Placemark");
+    placemark.innerHTML = `
+      <name>${count}</name>
+      <description>${count}</description>
+      <styleUrl>#${color}</styleUrl>
+      <Point>
+        <coordinates>${lon},${lat},0</coordinates>
+      </Point>
+    `;
+    documentNode.appendChild(placemark);
+  }
+
+  const kmlOutput = serializer.serializeToString(doc);
+  const zip = new JSZip();
+  zip.file("doc.kml", kmlOutput);
+  zip.generateAsync({ type: "blob" })
+    .then((content) => {
+      saveAs(content, "fat_output.kmz");
+    });
+}
+</script>
+</body>
+</html>
