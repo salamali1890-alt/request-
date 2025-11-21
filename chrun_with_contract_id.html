@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>معالجة انتهاء الاشتراكات من ملف Excel</title>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <style>
+    :root { --bg:#0b1020; --card:#121a33; --text:#e9eefb; --muted:#aab4d6; --accent:#8ab4ff; --ok:#70d28f; --warn:#ffd166; }
+    html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto; background:var(--bg); color:var(--text)}
+    .container{max-width:1100px;margin:32px auto;padding:0 16px}
+    .card{background:var(--card);border-radius:18px;box-shadow:0 10px 40px rgba(0,0,0,.25);padding:20px;margin-bottom:18px}
+    h1{margin:0 0 12px;font-size:28px}
+    .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+    label{font-size:14px;color:var(--muted)}
+    input[type="file"],select,input[type="month"],input[type="number"],button{background:#0f1630;color:var(--text);border:1px solid #27345c;border-radius:12px;padding:10px 12px}
+    button{cursor:pointer;border:1px solid #345;}
+    button.primary{background:#1a2a57;border-color:#2c4b8a}
+    button.primary:hover{filter:brightness(1.1)}
+    table{width:100%;border-collapse:collapse;margin-top:14px}
+    th,td{border-bottom:1px solid #2a3866;padding:10px;text-align:right;font-size:14px}
+    th{position:sticky;top:0;background:#0f1737}
+    .pill{padding:2px 8px;border-radius:999px;font-size:12px}
+    .ok{background:rgba(112,210,143,.15);color:var(--ok);border:1px solid rgba(112,210,143,.35)}
+    .warn{background:rgba(255,209,102,.10);color:var(--warn);border:1px solid rgba(255,209,102,.35)}
+    .muted{color:var(--muted)}
+    .footer{display:flex;gap:8px;flex-wrap:wrap}
+    .hint{font-size:12px;color:var(--muted)}
+    .kbd{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;background:#0b132b;border:1px solid #263663;padding:2px 6px;border-radius:6px}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <h1>📘 معالجة ملف Excel للحضور/الانتهاء</h1>
+      <p class="muted">ارفع ملف إكسل يحتوي على الأعمدة: <span class="kbd">username</span>, <span class="kbd">firstname</span>, <span class="kbd">lastname</span>, <span class="kbd">city</span>, <span class="kbd">phone</span>, <span class="kbd">contract_id</span>, <span class="kbd">expiration</span>. سنحسب: <span class="kbd">months_diff</span>, <span class="kbd">expiration_to_current_month</span>, وعامود مطروح منه أيام.</p>
+      <div class="row" style="margin-top:8px">
+        <div>
+          <label>📤 رفع ملف Excel</label><br>
+          <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" />
+        </div>
+        <div>
+          <label>🗓️ الشهر المرجعي (الوصول إليه)</label><br>
+          <input type="month" id="anchorMonth" />
+        </div>
+        <div>
+          <label>➖ عدد الأيام لطرحها</label><br>
+          <input type="number" id="daysOffset" value="4" min="0" style="width:110px" />
+        </div>
+        <div style="align-self:end">
+          <button class="primary" id="processBtn">تشغيل المعالجة</button>
+        </div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <div class="hint">* إذا كانت تواريخ <span class="kbd">expiration</span> لاحقة للشهر المرجعي، لن يتم احتساب <span class="kbd">months_diff</span> (تترك فارغة).</div>
+      </div>
+    </div>
+
+    <div class="card" id="resultsCard" style="display:none">
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <h2 style="margin:0">النتائج</h2>
+        <div class="footer">
+          <button id="downloadXlsx">تنزيل XLSX</button>
+          <button id="downloadCsv">تنزيل CSV</button>
+        </div>
+      </div>
+      <div id="summary" class="muted" style="margin-top:6px"></div>
+      <div style="overflow:auto;max-height:60vh">
+        <table id="resultTable">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const byId = (id) => document.getElementById(id);
+
+    function toDate(val){
+      if (val == null || val === '') return null;
+      if (val instanceof Date) return val;
+      if (!isNaN(val)) {
+        const n = Number(val);
+        const d = new Date(Date.UTC(1899, 11, 30));
+        d.setUTCDate(d.getUTCDate() + Math.floor(n));
+        const frac = n - Math.floor(n);
+        d.setUTCHours(24 * frac);
+        return d;
+      }
+      const d = new Date(val);
+      return isNaN(d) ? null : d;
+    }
+
+    function startOfMonth(d){ return new Date(d.getFullYear(), d.getMonth(), 1); }
+
+    function addMonths(date, months){
+      const d = new Date(date.getTime());
+      const day = d.getDate();
+      d.setMonth(d.getMonth() + months);
+      if (d.getDate() < day) d.setDate(0);
+      return d;
+    }
+
+    function fmtISO(d){
+      if (!d) return '';
+      const y = d.getFullYear();
+      const m = String(d.getMonth()+1).padStart(2,'0');
+      const dd = String(d.getDate()).padStart(2,'0');
+      return `${y}-${m}-${dd}`;
+    }
+
+    function monthDiff(anchor, exp){
+      const aY = anchor.getFullYear(), aM = anchor.getMonth();
+      const eY = exp.getFullYear(), eM = exp.getMonth();
+      return (aY - eY) * 12 + (aM - eM);
+    }
+
+    const HEADER_MAP = {
+      username:  ['username','user name','user','اسم المستخدم','اسم_المستخدم','يوزر','يوزرنيم'],
+      firstname: ['firstname','first name','name','الاسم','الاسم الاول','اسم'],
+      lastname:  ['lastname','last name','اللقب','العائلة','الكنية'],
+      city:      ['city','المدينة','مدينة'],
+      phone:     ['phone','telephone','mobile','هاتف','موبايل','رقم الهاتف'],
+      contract_id: ['contract_id','contract id','contract','عقد','رقم_العقد','رقم العقد','كونتراكت','كونتراكت آي دي'],
+      expiration:['expiration','expiry','expire','انتهاء','تاريخ الانتهاء','تاريخ_الانتهاء']
+    };
+
+    function normalizeHeaders(row){
+      const keys = Object.keys(row);
+      const map = {};
+      for (const std of Object.keys(HEADER_MAP)){
+        for (const cand of HEADER_MAP[std]){
+          const hit = keys.find(k => k.trim().toLowerCase() === cand.trim().toLowerCase());
+          if (hit){ map[std] = hit; break; }
+        }
+      }
+      return map;
+    }
+
+    let processedRows = [];
+
+    byId('anchorMonth').value = (function(){
+      const now = new Date();
+      const y = now.getFullYear();
+      const m = String(now.getMonth()+1).padStart(2,'0');
+      return `${y}-${m}`;
+    })();
+
+    byId('processBtn').addEventListener('click', async () => {
+      const file = byId('fileInput').files[0];
+      if (!file){ alert('من فضلك اختر ملف Excel أولاً'); return; }
+
+      const [yy, mm] = byId('anchorMonth').value.split('-').map(Number);
+      const anchor = new Date(yy, mm-1, 1);
+      const daysOffset = parseInt(byId('daysOffset').value || '4', 10);
+
+      const data = await file.arrayBuffer();
+      const wb = XLSX.read(data, {type:'array'});
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, {defval:''});
+      if (!rows.length){ alert('الملف خالٍ من الصفوف.'); return; }
+
+      const headerMap = normalizeHeaders(rows[0]);
+      const required = ['username','firstname','lastname','city','phone','contract_id','expiration'];
+      const miss = required.filter(k => !headerMap[k]);
+      if (miss.length){
+        alert('لم أجد الأعمدة المطلوبة: ' + miss.join(', ') + '\nتحقق من أسماء الأعمدة في الملف.');
+        return;
+      }
+
+      processedRows = rows.map(r => {
+        const exp = toDate(r[headerMap.expiration]);
+        let months = '';
+        let aligned = '';
+        let minusDays = '';
+        if (exp){
+          const md = monthDiff(anchor, startOfMonth(exp));
+          if (md >= 0){
+            months = md;
+            const alignedDate = addMonths(exp, md);
+            aligned = fmtISO(alignedDate);
+            const minus = new Date(alignedDate.getTime() - (daysOffset * 24*60*60*1000));
+            minusDays = fmtISO(minus);
+          }
+        }
+        return {
+          username: r[headerMap.username],
+          firstname: r[headerMap.firstname],
+          lastname: r[headerMap.lastname],
+          city: r[headerMap.city],
+          phone: r[headerMap.phone],
+          contract_id: r[headerMap.contract_id],
+          expiration: exp ? fmtISO(exp) : '',
+          months_diff: months,
+          expiration_to_current_month: aligned,
+          expiration_minus_days: minusDays
+        };
+      });
+
+      renderTable(processedRows);
+      byId('resultsCard').style.display = '';
+
+      const totals = processedRows.length;
+      const withMonths = processedRows.filter(x => x.months_diff !== '').length;
+      byId('summary').innerHTML = `عدد الصفوف: <b class="pill ok">${totals}</b> · صفوف محسوبة: <b class="pill warn">${withMonths}</b> · شهر مرجعي: <span class="kbd">${yy}-${String(mm).padStart(2,'0')}</span> · طرح أيام: <span class="kbd">${daysOffset}</span>`;
+    });
+
+    function renderTable(rows){
+      const thead = byId('resultTable').querySelector('thead');
+      const tbody = byId('resultTable').querySelector('tbody');
+      thead.innerHTML = '';
+      tbody.innerHTML = '';
+
+      const cols = [
+        'username','firstname','lastname','city','phone','contract_id','expiration',
+        'months_diff','expiration_to_current_month','expiration_minus_days'
+      ];
+      const trh = document.createElement('tr');
+      cols.forEach(c => {
+        const th = document.createElement('th'); th.textContent = c; trh.appendChild(th);
+      });
+      thead.appendChild(trh);
+
+      rows.forEach(r => {
+        const tr = document.createElement('tr');
+        cols.forEach(c => {
+          const td = document.createElement('td');
+          td.textContent = r[c] ?? '';
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      });
+    }
+
+    function downloadXlsx(){
+      if (!processedRows.length){ alert('لا توجد نتائج للتنزيل.'); return; }
+      const ws = XLSX.utils.json_to_sheet(processedRows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'results');
+      XLSX.writeFile(wb, 'expiration_processed.xlsx');
+    }
+
+    function downloadCsv(){
+      if (!processedRows.length){ alert('لا توجد نتائج للتنزيل.'); return; }
+      const ws = XLSX.utils.json_to_sheet(processedRows);
+      const csv = XLSX.utils.sheet_to_csv(ws);
+      const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'expiration_processed.csv'; a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    byId('downloadXlsx').addEventListener('click', downloadXlsx);
+    byId('downloadCsv').addEventListener('click', downloadCsv);
+  </script>
+</body>
+</html>
