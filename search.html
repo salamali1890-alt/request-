@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="UTF-8">
+  <title>بحث FAT بعد / وتنزيل النتائج</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <style>
+    body { font-family: Arial; padding: 20px; direction: rtl; }
+    input, button { padding: 10px; margin: 10px 5px; font-size: 16px; }
+    #result { margin-top: 20px; padding: 15px; background: #f1f1f1; border: 1px solid #ccc; width: fit-content; }
+    table { border-collapse: collapse; margin-top: 10px; direction: ltr; }
+    th, td { border: 1px solid #999; padding: 8px 12px; }
+  </style>
+</head>
+<body>
+
+<h2>🔍 البحث حسب ما بعد / في FAT وتنزيل النتائج</h2>
+
+<label>📥 ملف المستخدمين (رقم fat + عدد المستخدمين):</label>
+<input type="file" id="fileFatUsers" accept=".xlsx" />
+
+<label>📥 ملف FAT + Coordinates:</label>
+<input type="file" id="fileFdtFat" accept=".xlsx" />
+
+<label>🔑 أدخل الجزء بعد / (مثل: BS305 أو 305):</label>
+<input type="text" id="fatSuffixInput" placeholder="مثال: BS305 أو 305" />
+
+<button onclick="searchByFlexibleFatSuffix()">بحث</button>
+<button onclick="exportToExcel()" id="downloadBtn" style="display:none;">📥 تنزيل النتائج Excel</button>
+
+<div id="result"></div>
+
+<script>
+let fatUsersData = [];
+let fdtFatData = [];
+let searchResults = [];
+
+document.getElementById('fileFatUsers').addEventListener('change', function (e) {
+  readExcelFile(e.target.files[0], data => fatUsersData = data);
+});
+
+document.getElementById('fileFdtFat').addEventListener('change', function (e) {
+  readExcelFile(e.target.files[0], data => fdtFatData = data);
+});
+
+function readExcelFile(file, callback) {
+  const reader = new FileReader();
+  reader.onload = function (e) {
+    const data = new Uint8Array(e.target.result);
+    const workbook = XLSX.read(data, { type: 'array' });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const json = XLSX.utils.sheet_to_json(sheet);
+    callback(json);
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function extractFatNumber(fat) {
+  const fatStr = (fat || "").toString();
+  const match = fatStr.match(/F0*(\d+)/i);
+  return match ? parseInt(match[1]) : null;
+}
+
+function getSuffixAfterSlash(fat) {
+  const parts = (fat || "").toString().split('/');
+  return parts.length > 1 ? parts[1].toLowerCase() : '';
+}
+
+function searchByFlexibleFatSuffix() {
+  const suffix = document.getElementById("fatSuffixInput").value.trim().toLowerCase();
+  const resultDiv = document.getElementById("result");
+  const downloadBtn = document.getElementById("downloadBtn");
+  resultDiv.innerHTML = "";
+  searchResults = [];
+
+  if (!suffix) {
+    resultDiv.innerHTML = "⚠️ الرجاء إدخال قيمة بعد / (مثل BS305 أو 305).";
+    downloadBtn.style.display = "none";
+    return;
+  }
+
+  const matches = fdtFatData.filter(row => {
+    const fat = (row.FAT || "").toString();
+    const suffixPart = getSuffixAfterSlash(fat);
+    return suffixPart.includes(suffix);
+  });
+
+  if (matches.length === 0) {
+    resultDiv.innerHTML = `❌ لم يتم العثور على أي FAT يحتوي على "${suffix}" بعد "/".`;
+    downloadBtn.style.display = "none";
+    return;
+  }
+
+  searchResults = matches.map(row => {
+    const fatFull = (row.FAT || "").toString();
+    const coord = (row.coordinates || "").toString();
+    const fatNum = extractFatNumber(fatFull);
+    let totalUsers = 0;
+
+    if (fatNum !== null) {
+      fatUsersData.forEach(u => {
+        const userFatNum = parseInt(u.fat);
+        if (userFatNum === fatNum) {
+          totalUsers += parseInt(u["no of user"]) || 0;
+        }
+      });
+    }
+
+    return {
+      fat: fatFull,
+      coordinate: coord,
+      "no of user": totalUsers
+    };
+  });
+
+  // جدول النتائج
+  let tableHTML = "<table><thead><tr><th>fat</th><th>coordinate</th><th>no of user</th></tr></thead><tbody>";
+  searchResults.forEach(row => {
+    tableHTML += `<tr>
+      <td>${row.fat}</td>
+      <td>${row.coordinate}</td>
+      <td>${row["no of user"]}</td>
+    </tr>`;
+  });
+  tableHTML += "</tbody></table>";
+  resultDiv.innerHTML = `<strong>✅ عدد النتائج:</strong> ${searchResults.length}<br>${tableHTML}`;
+  downloadBtn.style.display = "inline-block";
+}
+
+function exportToExcel() {
+  if (!searchResults.length) return;
+  const ws = XLSX.utils.json_to_sheet(searchResults);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "fat_results");
+  XLSX.writeFile(wb, "fat_results.xlsx");
+}
+</script>
+
+</body>
+</html>
