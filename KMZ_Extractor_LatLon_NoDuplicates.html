@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8" />
+  <title>KMZ → Lat/Lon Extractor (No Duplicates)</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+      background: #f5f5f5;
+    }
+    h1 {
+      font-size: 20px;
+      margin-bottom: 10px;
+    }
+    .card {
+      background: #ffffff;
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+      max-width: 900px;
+    }
+    label {
+      display: block;
+      margin-bottom: 6px;
+      font-weight: bold;
+    }
+    input[type="file"],
+    input[type="text"] {
+      margin-bottom: 10px;
+      padding: 6px 8px;
+      border-radius: 6px;
+      border: 1px solid #ccc;
+      width: 100%;
+      max-width: 400px;
+    }
+    button {
+      padding: 8px 16px;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      margin-right: 8px;
+    }
+    button.primary {
+      background: #2563eb;
+      color: white;
+    }
+    button.secondary {
+      background: #e5e7eb;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 15px;
+      font-size: 13px;
+    }
+    th, td {
+      border: 1px solid #ddd;
+      padding: 4px 6px;
+      text-align: left;
+      white-space: nowrap;
+    }
+    th {
+      background: #f3f4f6;
+    }
+    #status {
+      margin-top: 10px;
+      font-size: 13px;
+      color: #1f2933;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>KMZ → Name / BS / Lat / Lon / LatLon (Unique Points)</h1>
+
+    <label for="kmzFile">اختر ملف KMZ</label>
+    <input type="file" id="kmzFile" accept=".kmz" />
+
+    <label for="bsNumber">رقم الـ BS (مثال: 191)</label>
+    <input type="text" id="bsNumber" placeholder="191" />
+
+    <button class="primary" id="parseBtn">Parse KMZ</button>
+    <button class="secondary" id="downloadCsvBtn" disabled>Download CSV</button>
+
+    <div id="status"></div>
+
+    <table id="resultTable" style="display:none;">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>BS</th>
+          <th>Lat</th>
+          <th>Lon</th>
+          <th>LatLon</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <script>
+    const parseBtn = document.getElementById('parseBtn');
+    const downloadCsvBtn = document.getElementById('downloadCsvBtn');
+    const statusDiv = document.getElementById('status');
+    const resultTable = document.getElementById('resultTable');
+    const tbody = resultTable.querySelector('tbody');
+
+    let lastRows = [];
+
+    parseBtn.addEventListener('click', async () => {
+      const fileInput = document.getElementById('kmzFile');
+      const bsNumberInput = document.getElementById('bsNumber');
+      const file = fileInput.files[0];
+      const bsValue = bsNumberInput.value.trim() || '';
+
+      if (!file) {
+        alert('رجاءً اختر ملف KMZ أولاً');
+        return;
+      }
+      if (!bsValue) {
+        alert('رجاءً اكتب رقم الـ BS (مثال: 191)');
+        return;
+      }
+
+      statusDiv.textContent = 'جارٍ قراءة الملف...';
+      lastRows = [];
+      tbody.innerHTML = '';
+      resultTable.style.display = 'none';
+      downloadCsvBtn.disabled = true;
+
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const zip = await JSZip.loadAsync(arrayBuffer);
+
+        let kmlFileName = null;
+        zip.forEach((relativePath, zipEntry) => {
+          if (!kmlFileName && relativePath.toLowerCase().endsWith('.kml')) {
+            kmlFileName = relativePath;
+          }
+        });
+
+        if (!kmlFileName) {
+          statusDiv.textContent = 'لم يتم العثور على ملف KML داخل الـ KMZ.';
+          return;
+        }
+
+        const kmlText = await zip.file(kmlFileName).async('text');
+
+        statusDiv.textContent = 'جارٍ تحليل ملف KML...';
+        const parser = new DOMParser();
+        const xmlDoc = parser.parseFromString(kmlText, 'text/xml');
+
+        const placemarks = xmlDoc.getElementsByTagName('Placemark');
+        if (!placemarks.length) {
+          statusDiv.textContent = 'لم يتم العثور على Placemarks داخل الـ KML.';
+          return;
+        }
+
+        const seenNames = {}; // لمنع التكرار حسب الاسم
+
+        for (let i = 0; i < placemarks.length; i++) {
+          const pm = placemarks[i];
+          const nameEl = pm.getElementsByTagName('name')[0];
+
+          if (!nameEl) continue;
+
+          const name = (nameEl.textContent || '').trim();
+
+          // إذا هذا الاسم تمت إضافته سابقاً، تجاهله
+          if (seenNames[name]) {
+            continue;
+          }
+
+          // نأخذ فقط الإحداثيات التي داخل Point
+          const pointEl = pm.getElementsByTagName('Point')[0];
+          if (!pointEl) continue;
+
+          const coordsEl = pointEl.getElementsByTagName('coordinates')[0];
+          if (!coordsEl) continue;
+
+          const coordText = (coordsEl.textContent || '').trim();
+          const parts = coordText.split(',');
+          if (parts.length < 2) continue;
+
+          const lon = parts[0].trim();
+          const lat = parts[1].trim();
+          const latlon = lat + ' ' + lon; // "Lat Lon"
+
+          const row = { name, bs: bsValue, lat, lon, latlon };
+          lastRows.push(row);
+          seenNames[name] = true; // علمنا انه هذا الاسم تم استخدامه
+        }
+
+        if (!lastRows.length) {
+          statusDiv.textContent = 'لم يتم استخراج أي نقاط (Point) من الملف أو جميعها مكررة.';
+          return;
+        }
+
+        tbody.innerHTML = '';
+        lastRows.forEach(r => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td>${r.name}</td>
+            <td>${r.bs}</td>
+            <td>${r.lat}</td>
+            <td>${r.lon}</td>
+            <td>${r.latlon}</td>
+          `;
+          tbody.appendChild(tr);
+        });
+
+        resultTable.style.display = 'table';
+        downloadCsvBtn.disabled = false;
+        statusDiv.textContent = `تم استخراج ${lastRows.length} نقطة (بدون تكرار) بنجاح.`;
+
+      } catch (err) {
+        console.error(err);
+        statusDiv.textContent = 'حدث خطأ أثناء قراءة أو تحليل الملف.';
+      }
+    });
+
+    downloadCsvBtn.addEventListener('click', () => {
+      if (!lastRows.length) return;
+
+      let csv = 'Name,BS,Lat,Lon,LatLon\n';
+      lastRows.forEach(r => {
+        csv += `"${r.name}","${r.bs}","${r.lat}","${r.lon}","${r.latlon}"\n`;
+      });
+
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'kmz_points_unique.csv';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    });
+  </script>
+</body>
+</html>
