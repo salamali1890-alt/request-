@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>اكسبايريشن: يوميًا + parent + إجمالي parent + إجمالي المدن (XLSX)</title>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <style>
+    :root {
+      --bg:#0b1020; --card:#121a33; --text:#e9eefb; --muted:#aab4d6; --accent:#8ab4ff;
+    }
+    * { box-sizing: border-box; }
+    body{margin:0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Naskh Arabic UI", Tahoma, Arial, sans-serif; background:var(--bg); color:var(--text);}
+    .container{max-width:1100px; margin:32px auto; padding:16px;}
+    h1{font-size:24px; margin:0 0 12px;}
+    .card{background:var(--card); border-radius:18px; padding:16px; box-shadow: 0 10px 30px rgba(0,0,0,0.25);}
+    .row{display:flex; flex-wrap:wrap; gap:12px; align-items:center;}
+    .row > *{flex:1}
+    label{display:block; margin-bottom:6px; color:var(--muted); font-size:14px;}
+    input[type="file"], input[type="text"], input[type="date"], button{
+      width:100%; padding:10px 12px; border-radius:12px; border:1px solid #2a335d; background:#0e1630; color:var(--text);
+    }
+    button{cursor:pointer; background:linear-gradient(135deg, #4169e1, #6a5acd); border:none; font-weight:600;}
+    button.secondary{background:#182044;}
+    table{width:100%; border-collapse:collapse; margin-top:14px; overflow:auto;}
+    th, td{padding:10px 12px; border-bottom:1px solid #2a335d; text-align:center; font-variant-numeric: tabular-nums;}
+    th{color:#bcd; background:#0f1733; position:sticky; top:0;}
+    tfoot td{font-weight:700;}
+    .hint{color:var(--muted); font-size:13px;}
+    .pill{display:inline-block; background:#111939; padding:6px 10px; border-radius:999px; color:#aab4d6; font-size:12px; margin-inline-start:8px;}
+    .hidden{display:none;}
+    .tabs{display:flex; gap:8px; margin-top:12px;}
+    .tab{padding:8px 12px; background:#0f1733; border-radius:10px; cursor:pointer; color:#9fb2ff;}
+    .tab.active{outline:2px solid #415ee1; color:#fff;}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>📅 الاشتراكات المنتهية: يوميًا + parent + إجمالي parent + إجمالي المدن (city)</h1>
+    <div class="card">
+      <div class="row">
+        <div style="flex:2">
+          <label>ارفع ملف Excel (XLSX)</label>
+          <input id="file" type="file" accept=".xlsx,.xls" />
+          <div class="hint">المعالجة داخل المتصفح — لا يتم رفع الملف للإنترنت.</div>
+        </div>
+        <div>
+          <label>اسم الشيت (اختياري)</label>
+          <input id="sheetName" type="text" placeholder="مثال: Sheet1" />
+        </div>
+        <div>
+          <label>عمود التاريخ (افتراضي: expiration)</label>
+          <input id="dateCol" type="text" placeholder="expiration" />
+        </div>
+        <div>
+          <label>عمود الـ Parent (افتراضي: parent_name)</label>
+          <input id="parentCol" type="text" placeholder="parent_name" />
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:10px">
+        <div>
+          <label>من تاريخ</label>
+          <input id="from" type="date" />
+        </div>
+        <div>
+          <label>إلى تاريخ</label>
+          <input id="to" type="date" />
+        </div>
+        <div class="row" style="flex:1">
+          <button id="analyze">تحليل</button>
+          <button id="export" class="secondary" disabled>تصدير Excel (XLSX)</button>
+        </div>
+      </div>
+
+      <div id="summary" class="footer hidden"></div>
+
+      <div class="tabs hidden" id="tabs">
+        <div class="tab active" data-tab="perday">📄 حسب اليوم</div>
+        <div class="tab" data-tab="byparent">🗂️ حسب اليوم والـ parent</div>
+        <div class="tab" data-tab="totals">📌 إجمالي كل parent</div>
+        <div class="tab" data-tab="cities">🏙️ إجمالي المدن (city)</div>
+      </div>
+
+      <div id="views">
+        <div id="view-perday" class="hidden">
+          <table>
+            <thead><tr><th>التاريخ</th><th>عدد الاكسبايريشن</th></tr></thead>
+            <tbody id="tbody-perday"></tbody>
+            <tfoot><tr><td>المجموع</td><td id="total-perday">0</td></tr></tfoot>
+          </table>
+        </div>
+
+        <div id="view-byparent" class="hidden">
+          <table>
+            <thead><tr><th>التاريخ</th><th>parent_name</th><th>عدد الاكسبايريشن</th></tr></thead>
+            <tbody id="tbody-byparent"></tbody>
+            <tfoot><tr><td colspan="2">المجموع</td><td id="total-byparent">0</td></tr></tfoot>
+          </table>
+        </div>
+
+        <div id="view-totals" class="hidden">
+          <table>
+            <thead><tr><th>parent_name</th><th>الإجمالي</th></tr></thead>
+            <tbody id="tbody-totals"></tbody>
+            <tfoot><tr><td>المجموع العام</td><td id="grand-total">0</td></tr></tfoot>
+          </table>
+        </div>
+
+        <div id="view-cities" class="hidden">
+          <table>
+            <thead><tr><th>city</th><th>الإجمالي</th></tr></thead>
+            <tbody id="tbody-cities"></tbody>
+            <tfoot><tr><td>المجموع العام</td><td id="grand-cities">0</td></tr></tfoot>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer">
+      <span class="pill">الأعمدة الافتراضية: <b>expiration</b> / <b>parent_name</b></span>
+      <span class="pill">المدن تُكتشف تلقائيًا بترتيب: <b>city</b> ← <b>area_name</b> ← <b>area</b> ← <b>location</b></span>
+      <span class="pill">فلترة اختيارية حسب المدى الزمني</span>
+    </div>
+  </div>
+
+<script>
+function toDateOnly(d) {
+  const dt = (d instanceof Date) ? d : new Date(d);
+  if (isNaN(dt)) return null;
+  const y = dt.getFullYear();
+  const m = String(dt.getMonth()+1).padStart(2, '0');
+  const day = String(dt.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+function parseMaybeExcelDate(v) {
+  if (v == null || v === "") return null;
+  if (typeof v === "number") {
+    const epoch = new Date(Date.UTC(1899, 11, 30));
+    return new Date(epoch.getTime() + v*86400000);
+  }
+  const d = new Date(v);
+  if (!isNaN(d)) return d;
+  const m = String(v).match(/^(\\d{1,2})[\\/\\-](\\d{1,2})[\\/\\-](\\d{2,4})/);
+  if (m) {
+    const dd = parseInt(m[1], 10);
+    const mm = parseInt(m[2], 10) - 1;
+    let yyyy = parseInt(m[3], 10);
+    if (yyyy < 100) yyyy += 2000;
+    return new Date(yyyy, mm, dd);
+  }
+  return null;
+}
+function pickCityKey(sampleRow){
+  const candidates = ["city","area_name","area","location"];
+  const keys = Object.keys(sampleRow || {}).map(k=>k.toLowerCase());
+  for (const c of candidates){
+    const idx = keys.indexOf(c);
+    if (idx !== -1) return Object.keys(sampleRow)[idx];
+  }
+  return null;
+}
+
+const $file = document.getElementById("file");
+const $sheet = document.getElementById("sheetName");
+const $dateCol = document.getElementById("dateCol");
+const $parentCol = document.getElementById("parentCol");
+const $from = document.getElementById("from");
+const $to = document.getElementById("to");
+const $analyze = document.getElementById("analyze");
+const $export = document.getElementById("export");
+
+const $tabs = document.getElementById("tabs");
+const $summary = document.getElementById("summary");
+
+const $viewPerDay = document.getElementById("view-perday");
+const $viewByParent = document.getElementById("view-byparent");
+const $viewTotals = document.getElementById("view-totals");
+const $viewCities = document.getElementById("view-cities");
+
+const $tbodyPerDay = document.getElementById("tbody-perday");
+const $totalPerDay = document.getElementById("total-perday");
+const $tbodyByParent = document.getElementById("tbody-byparent");
+const $totalByParent = document.getElementById("total-byparent");
+const $tbodyTotals = document.getElementById("tbody-totals");
+const $grandTotal = document.getElementById("grand-total");
+const $tbodyCities = document.getElementById("tbody-cities");
+const $grandCities = document.getElementById("grand-cities");
+
+document.getElementById("tabs").addEventListener("click", (e)=>{
+  const tab = e.target.closest(".tab");
+  if(!tab) return;
+  document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));
+  tab.classList.add("active");
+  const which = tab.dataset.tab;
+  $viewPerDay.classList.toggle("hidden", which!=="perday");
+  $viewByParent.classList.toggle("hidden", which!=="byparent");
+  $viewTotals.classList.toggle("hidden", which!=="totals");
+  $viewCities.classList.toggle("hidden", which!=="cities");
+});
+
+let perDay = [];
+let perDayTotal = 0;
+let byParent = [];
+let byParentTotal = 0;
+let parentTotals = []; // [parent_name, total]
+let cityTotals = [];   // [city, total]
+
+let usedCityKey = null;
+
+$analyze.addEventListener("click", async () => {
+  if (!$file.files.length) return alert("يرجى اختيار ملف Excel أولاً");
+  const buf = await $file.files[0].arrayBuffer();
+  const wb = XLSX.read(buf, { type: "array" });
+  const targetSheet = $sheet.value && wb.Sheets[$sheet.value] ? $sheet.value : wb.SheetNames[0];
+  const ws = wb.Sheets[targetSheet];
+  if (!ws) return alert("تعذر العثور على الشيت المحدد");
+
+  const rows = XLSX.utils.sheet_to_json(ws, { defval: null });
+  const dateKey = ($dateCol.value || "expiration").trim();
+  const parentKey = ($parentCol.value || "parent_name").trim();
+
+  if (!rows.length || !(dateKey in rows[0])) return alert("تعذر العثور على عمود التاريخ: " + dateKey);
+  if (!(parentKey in rows[0])) return alert("تعذر العثور على عمود الـ parent: " + parentKey);
+
+  usedCityKey = pickCityKey(rows[0]); // Prefer 'city', then area_name, area, location
+
+  const from = $from.value ? new Date($from.value) : null;
+  const to = $to.value ? new Date($to.value) : null;
+
+  const mapDay = new Map();
+  const mapDayParent = new Map();
+  const mapParentTotals = new Map();
+  const mapCityTotals = new Map();
+
+  for (const r of rows) {
+    const d = parseMaybeExcelDate(r[dateKey]);
+    const key = toDateOnly(d);
+    if (!key) continue;
+    if (from && new Date(key) < from) continue;
+    if (to && new Date(key) > to) continue;
+
+    const parent = (r[parentKey]==null || String(r[parentKey]).trim()==="") ? "(بدون parent)" : String(r[parentKey]).trim();
+    const cityVal = usedCityKey ? String(r[usedCityKey] ?? "").trim() : "";
+    const city = cityVal ? cityVal : "(بدون city)";
+
+    mapDay.set(key, (mapDay.get(key)||0)+1);
+    const k2 = key + "||" + parent;
+    mapDayParent.set(k2, (mapDayParent.get(k2)||0)+1);
+    mapParentTotals.set(parent, (mapParentTotals.get(parent)||0)+1);
+    mapCityTotals.set(city, (mapCityTotals.get(city)||0)+1);
+  }
+
+  perDay = Array.from(mapDay.entries()).sort((a,b)=>a[0].localeCompare(b[0]));
+  byParent = Array.from(mapDayParent.entries()).map(([k,c])=>{
+    const [date, parent] = k.split("||");
+    return [date, parent, c];
+  }).sort((a,b)=> a[0]===b[0] ? a[1].localeCompare(b[1]) : a[0].localeCompare(b[0]));
+  parentTotals = Array.from(mapParentTotals.entries()).map(([p,c])=>[p,c]).sort((a,b)=> b[1]-a[1] || a[0].localeCompare(b[0]));
+  cityTotals = Array.from(mapCityTotals.entries()).map(([p,c])=>[p,c]).sort((a,b)=> b[1]-a[1] || a[0].localeCompare(b[0]));
+
+  perDayTotal = perDay.reduce((s, [,c])=> s+c, 0);
+  byParentTotal = byParent.reduce((s, r)=> s + r[2], 0);
+  const grand = parentTotals.reduce((s, r)=> s + r[1], 0);
+  const grandCitiesVal = cityTotals.reduce((s, r)=> s + r[1], 0);
+
+  // Render
+  $tbodyPerDay.innerHTML = perDay.map(([date,count])=>`<tr><td>${date}</td><td>${count}</td></tr>`).join("");
+  $totalPerDay.textContent = perDayTotal;
+  $tbodyByParent.innerHTML = byParent.map(([date,parent,count])=>`<tr><td>${date}</td><td>${parent}</td><td>${count}</td></tr>`).join("");
+  $totalByParent.textContent = byParentTotal;
+  $tbodyTotals.innerHTML = parentTotals.map(([p,c])=>`<tr><td>${p}</td><td>${c}</td></tr>`).join("");
+  $grandTotal.textContent = grand;
+  $tbodyCities.innerHTML = cityTotals.map(([p,c])=>`<tr><td>${p}</td><td>${c}</td></tr>`).join("");
+  $grandCities.textContent = grandCitiesVal;
+
+  const cityInfo = usedCityKey ? `العمود المستخدم للمدن: <b>${usedCityKey}</b>` : `لم يُعثر على عمود مدينة؛ تم تصنيف الكل كـ <b>(بدون city)</b>`;
+  $summary.innerHTML = `
+    <span class="pill">أيام: <b>${perDay.length}</b></span>
+    <span class="pill">Distinct parent: <b>${parentTotals.length}</b></span>
+    <span class="pill">Distinct cities: <b>${cityTotals.length}</b></span>
+    <span class="pill">${cityInfo}</span>
+  `;
+  $summary.classList.remove("hidden");
+  document.getElementById("tabs").classList.remove("hidden");
+  document.querySelector('.tab[data-tab="perday"]').classList.add("active");
+  $viewPerDay.classList.remove("hidden");
+  $viewByParent.classList.add("hidden");
+  $viewTotals.classList.add("hidden");
+  $viewCities.classList.add("hidden");
+  $export.disabled = perDay.length===0;
+});
+
+$export.addEventListener("click", () => {
+  if (!perDay.length) return;
+
+  // Sheet 1: PerDay
+  const aoa1 = [["date","count"], ...perDay, ["TOTAL", perDayTotal]];
+  const ws1 = XLSX.utils.aoa_to_sheet(aoa1);
+
+  // Sheet 2: PerDayByParent
+  const aoa2 = [["date","parent_name","count"], ...byParent, ["TOTAL","", byParentTotal]];
+  const ws2 = XLSX.utils.aoa_to_sheet(aoa2);
+
+  // Sheet 3: ParentTotals
+  const totalParents = [["parent_name","total_count"], ...parentTotals];
+  totalParents.push(["TOTAL", parentTotals.reduce((s,r)=>s+r[1],0)]);
+  const ws3 = XLSX.utils.aoa_to_sheet(totalParents);
+
+  // Sheet 4: CityTotals (auto-detected city column)
+  const totalCities = [["city","total_count"], ...cityTotals];
+  totalCities.push(["TOTAL", cityTotals.reduce((s,r)=>s+r[1],0)]);
+  const ws4 = XLSX.utils.aoa_to_sheet(totalCities);
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws1, "PerDay");
+  XLSX.utils.book_append_sheet(wb, ws2, "PerDayByParent");
+  XLSX.utils.book_append_sheet(wb, ws3, "ParentTotals");
+  XLSX.utils.book_append_sheet(wb, ws4, "CityTotals");
+
+  XLSX.writeFile(wb, "expiration_per_day.xlsx");
+});
+</script>
+</body>
+</html>
