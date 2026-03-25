@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>تصدير إكسل: شيت منفصل لكل parent_name (firstname / phone / expiration)</title>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <style>
+    :root { --bg:#0b1020; --card:#121a33; --text:#e9eefb; --muted:#aab4d6; --accent:#8ab4ff; }
+    * { box-sizing: border-box; }
+    body{margin:0; font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Naskh Arabic UI",Tahoma,Arial; background:var(--bg); color:var(--text)}
+    .container{max-width:920px; margin:32px auto; padding:16px;}
+    h1{font-size:22px; margin:0 0 12px;}
+    .card{background:var(--card); border-radius:16px; padding:16px; box-shadow:0 10px 30px rgba(0,0,0,.25)}
+    .row{display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end}
+    .row > *{flex:1}
+    label{display:block; margin-bottom:6px; color:var(--muted); font-size:14px}
+    input, select, button{width:100%; padding:10px 12px; border-radius:12px; border:1px solid #2a335d; background:#0e1630; color:var(--text)}
+    button{cursor:pointer; background:linear-gradient(135deg,#4169e1,#6a5acd); border:none; font-weight:600}
+    .hint{color:var(--muted); font-size:13px}
+    .pill{display:inline-block; background:#111939; padding:6px 10px; border-radius:999px; color:#aab4d6; font-size:12px; margin:4px 6px 0 0}
+    .hidden{display:none}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>📑 شيت منفصل لكل <span style="color:#8ab4ff">parent_name</span> — الأعمدة: firstname / phone / expiration</h1>
+    <div class="card">
+      <div class="row">
+        <div style="flex:2">
+          <label>ارفع ملف Excel (XLSX)</label>
+          <input id="file" type="file" accept=".xlsx,.xls">
+          <div class="hint">المعالجة داخل المتصفح فقط.</div>
+        </div>
+        <div>
+          <label>اسم الشيت (اختياري)</label>
+          <input id="sheetName" placeholder="Sheet1 (إذا تُرك فارغ يستخدم أول شيت)">
+        </div>
+        <div>
+          <label>عمود التاريخ (افتراضي: expiration)</label>
+          <input id="dateCol" placeholder="expiration">
+        </div>
+        <div>
+          <label>اسم ملف الإخراج</label>
+          <input id="outName" value="by_parent_name.xlsx">
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:10px">
+        <div>
+          <label>من تاريخ</label>
+          <input id="from" type="date">
+        </div>
+        <div>
+          <label>إلى تاريخ</label>
+          <input id="to" type="date">
+        </div>
+        <div>
+          <button id="export" disabled>تصدير الآن (شيت/parent)</button>
+        </div>
+      </div>
+
+      <div id="summary" class="hidden">
+        <span class="pill" id="pill-rows"></span>
+        <span class="pill" id="pill-parents"></span>
+      </div>
+    </div>
+  </div>
+
+<script>
+function toDateOnly(d){ const dt=(d instanceof Date)?d:new Date(d); if(isNaN(dt))return null; return dt.toISOString().slice(0,10); }
+function parseMaybeExcelDate(v){
+  if(v==null||v==="")return null;
+  if(typeof v==="number"){ const epoch=new Date(Date.UTC(1899,11,30)); return new Date(epoch.getTime()+v*86400000); }
+  const d=new Date(v); if(!isNaN(d))return d;
+  const m=String(v).match(/^(\\d{1,2})[\\/\\-](\\d{1,2})[\\/\\-](\\d{2,4})/);
+  if(m){ let y=parseInt(m[3],10); if(y<100)y+=2000; return new Date(y,parseInt(m[2],10)-1,parseInt(m[1],10)); }
+  return null;
+}
+function sanitizeSheetName(name){
+  const bad=/[:\\/?*\\[\\]]/g;
+  let s=String(name||"Parent").replace(bad," ").trim();
+  if(!s) s="Parent";
+  if(s.length>31) s=s.slice(0,31);
+  return s;
+}
+function uniqueSheetName(base, used){
+  let name = sanitizeSheetName(base);
+  if(!used.has(name)){ used.add(name); return name; }
+  let i=2;
+  while(true){
+    const trial = sanitizeSheetName(`${base} (${i})`);
+    if(!used.has(trial)){ used.add(trial); return trial; }
+    i++; if(i>500) return sanitizeSheetName(base+" (dup)");
+  }
+}
+
+let cacheRows = [];
+
+const $file=document.getElementById("file");
+const $sheet=document.getElementById("sheetName");
+const $dateCol=document.getElementById("dateCol");
+const $from=document.getElementById("from");
+const $to=document.getElementById("to");
+const $export=document.getElementById("export");
+const $outName=document.getElementById("outName");
+const $summary=document.getElementById("summary");
+const $pillRows=document.getElementById("pill-rows");
+const $pillParents=document.getElementById("pill-parents");
+
+async function loadAndPrepare(){
+  const buf = await $file.files[0].arrayBuffer();
+  const wb = XLSX.read(buf,{type:"array"});
+  const tname = $sheet.value && wb.Sheets[$sheet.value] ? $sheet.value : wb.SheetNames[0];
+  const ws = wb.Sheets[tname];
+  if(!ws){ alert("تعذر العثور على الشيت المحدد"); return false; }
+  const rows = XLSX.utils.sheet_to_json(ws,{defval:null});
+  if(!rows.length){ alert("الملف خالٍ من البيانات"); return false; }
+
+  // required columns check
+  const required = ["parent_name","firstname","phone"];
+  for(const c of required){
+    if(!(c in rows[0])){
+      alert("يجب وجود الأعمدة: parent_name, firstname, phone (مفقود: "+c+")");
+      return false;
+    }
+  }
+  const dateKey = ($dateCol.value || "expiration").trim();
+  if(!(dateKey in rows[0])){
+    alert("عمود التاريخ غير موجود: "+dateKey);
+    return false;
+  }
+
+  const from = $from.value ? new Date($from.value) : null;
+  const to = $to.value ? new Date($to.value) : null;
+
+  // map rows
+  cacheRows = rows.map(r=>{
+    const dt = parseMaybeExcelDate(r[dateKey]);
+    return {
+      parent_name: r["parent_name"],
+      firstname: r["firstname"],
+      phone: r["phone"],
+      expiration: toDateOnly(dt),
+    };
+  }).filter(r=>{
+    if(!r.expiration) return false;
+    if(from && new Date(r.expiration) < from) return false;
+    if(to && new Date(r.expiration) > to) return false;
+    return true;
+  });
+
+  const total = cacheRows.length;
+  const parents = new Set(cacheRows.map(r=>(r.parent_name==null?"":String(r.parent_name).trim())||"(بدون Parent)")).size;
+  $pillRows.textContent = "عدد الصفوف: " + total;
+  $pillParents.textContent = "عدد الـ parent_name: " + parents;
+  $summary.classList.remove("hidden");
+  $export.disabled = total === 0;
+  return true;
+}
+
+$file.addEventListener("change", async ()=>{ if(!$file.files.length) return; await loadAndPrepare(); });
+$sheet.addEventListener("change", async ()=>{ if(!$file.files.length) return; await loadAndPrepare(); });
+$dateCol.addEventListener("change", async ()=>{ if(!$file.files.length) return; await loadAndPrepare(); });
+$from.addEventListener("change", async ()=>{ if(!$file.files.length) return; await loadAndPrepare(); });
+$to.addEventListener("change", async ()=>{ if(!$file.files.length) return; await loadAndPrepare(); });
+
+$export.addEventListener("click", ()=>{
+  if(!cacheRows.length) return;
+  const wb = XLSX.utils.book_new();
+
+  // group by parent_name
+  const map = new Map();
+  for(const r of cacheRows){
+    const key = (r.parent_name==null?"":String(r.parent_name).trim()) || "(بدون Parent)";
+    if(!map.has(key)) map.set(key, []);
+    map.get(key).push(r);
+  }
+
+  const usedNames = new Set();
+  const parents = Array.from(map.keys()).sort((a,b)=> a.localeCompare(b));
+  for(const parent of parents){
+    const arr = map.get(parent).slice().sort((a,b)=>{
+      if((a.firstname||"") === (b.firstname||"")) return (a.expiration||"").localeCompare(b.expiration||"");
+      return String(a.firstname||"").localeCompare(String(b.firstname||""));
+    });
+    const aoa = [["firstname","phone","expiration"]];
+    for(const rec of arr){
+      aoa.push([rec.firstname, rec.phone, rec.expiration]);
+    }
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    const sheetName = uniqueSheetName(parent, usedNames);
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  }
+
+  const out = ($outName.value && $outName.value.trim()) || "by_parent_name.xlsx";
+  XLSX.writeFile(wb, out);
+});
+</script>
+</body>
+</html>
